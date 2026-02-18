@@ -750,6 +750,36 @@ const MoonScene = ({ onModeChange }) => {
       camera.position.set(0, 200, 800)
       camera.lookAt(0, 0, 0)
       camera.updateProjectionMatrix()
+
+      // Add click handler to detect moon clicks
+      const handleClick = (event) => {
+        // Only handle clicks in orbit mode
+        if (isFirstPerson) return
+
+        const mouse = new THREE.Vector2()
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
+
+        const clickRaycaster = new THREE.Raycaster()
+        clickRaycaster.setFromCamera(mouse, camera)
+
+        // Check if moon was clicked
+        if (moon) {
+          const intersects = clickRaycaster.intersectObject(moon)
+          if (intersects.length > 0) {
+            // Moon was clicked, toggle to first person
+            if (window.toggleFirstPersonMode) {
+              window.toggleFirstPersonMode()
+            }
+          }
+        }
+      }
+
+      renderer.domElement.addEventListener('click', handleClick)
+      
+      return () => {
+        renderer.domElement.removeEventListener('click', handleClick)
+      }
     }
 
     // Setup first-person controls
@@ -866,6 +896,46 @@ const MoonScene = ({ onModeChange }) => {
         })
       }
 
+      // Click handler to detect sky clicks (return to orbit mode)
+      const handleSkyClick = (event) => {
+        // Only handle clicks in first-person mode
+        if (!isFirstPerson) return
+
+        const mouse = new THREE.Vector2()
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
+
+        const skyClickRaycaster = new THREE.Raycaster()
+        skyClickRaycaster.setFromCamera(mouse, camera)
+
+        // Check all objects in scene (moon, terrain, etc.)
+        const allObjects = []
+        if (moon) {
+          allObjects.push(moon)
+        }
+        if (terrainGroup && terrainGroup.visible) {
+          terrainGroup.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              allObjects.push(child)
+            }
+          })
+        }
+
+        // If nothing was hit, clicked on sky - return to orbit mode
+        const intersects = skyClickRaycaster.intersectObjects(allObjects, true)
+        if (intersects.length === 0) {
+          // Sky was clicked, toggle back to orbit mode
+          if (window.toggleFirstPersonMode) {
+            window.toggleFirstPersonMode()
+          }
+        }
+      }
+
+      renderer.domElement.addEventListener('click', handleSkyClick)
+      cleanupFunctions.push(() => {
+        renderer.domElement.removeEventListener('click', handleSkyClick)
+      })
+
       // Keyboard controls (desktop only)
       if (!isMobile) {
         const onKeyDown = (event) => {
@@ -915,7 +985,10 @@ const MoonScene = ({ onModeChange }) => {
     // Create terrain after moon so it can use moon material
     createTerrainFeatures()
     setupLighting()
-    setupOrbitControls()
+    let initialOrbitCleanup = setupOrbitControls()
+    if (initialOrbitCleanup) {
+      window.orbitCleanup = initialOrbitCleanup
+    }
 
     let firstPersonCleanup = null
 
@@ -1097,6 +1170,11 @@ const MoonScene = ({ onModeChange }) => {
         firstPersonCleanup()
         firstPersonCleanup = null
       }
+      // Clean up orbit controls click handler
+      if (window.orbitCleanup) {
+        window.orbitCleanup()
+        window.orbitCleanup = null
+      }
       firstPersonCleanup = setupFirstPersonControls()
       // Show terrain in first-person mode
       if (terrainGroup) {
@@ -1115,7 +1193,14 @@ const MoonScene = ({ onModeChange }) => {
       if (document.pointerLockElement === renderer.domElement) {
         document.exitPointerLock()
       }
-      setupOrbitControls()
+      // Clean up previous orbit controls click handler if exists
+      if (window.orbitCleanup) {
+        window.orbitCleanup()
+      }
+      const orbitCleanup = setupOrbitControls()
+      if (orbitCleanup) {
+        window.orbitCleanup = orbitCleanup
+      }
       // Hide terrain in orbit mode
       if (terrainGroup) {
         terrainGroup.visible = false
@@ -1136,6 +1221,11 @@ const MoonScene = ({ onModeChange }) => {
       }
       if (pointerLockControls) {
         pointerLockControls.disconnect()
+      }
+
+      if (window.orbitCleanup) {
+        window.orbitCleanup()
+        delete window.orbitCleanup
       }
 
       scene.traverse((object) => {
@@ -1165,6 +1255,14 @@ const MoonScene = ({ onModeChange }) => {
       onModeChange(!isFirstPerson)
     }
   }
+
+  // Expose toggleMode to window for use in click handler
+  useEffect(() => {
+    window.toggleFirstPersonMode = toggleMode
+    return () => {
+      delete window.toggleFirstPersonMode
+    }
+  }, [isFirstPerson])
 
   // Virtual joystick for mobile
   const joystickPosition = useRef({ x: 0, y: 0 })
@@ -1252,41 +1350,45 @@ const MoonScene = ({ onModeChange }) => {
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', touchAction: 'none' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
-      <button
-        onClick={toggleMode}
-        style={{
-          position: 'absolute',
-          top: isMobile ? '10px' : '20px',
-          right: isMobile ? '10px' : '20px',
-          zIndex: 1000,
-          padding: isMobile ? '10px 16px' : '12px 24px',
-          fontSize: isMobile ? '14px' : '16px',
-          fontWeight: 'bold',
-          backgroundColor: 'rgba(0, 0, 0, 0.7)',
-          color: 'white',
-          border: '2px solid rgba(255, 255, 255, 0.3)',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          backdropFilter: 'blur(10px)',
-          transition: 'all 0.3s ease',
-          userSelect: 'none',
-          WebkitUserSelect: 'none'
-        }}
-        onMouseEnter={(e) => {
-          if (!isMobile) {
-            e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'
-            e.target.style.borderColor = 'rgba(255, 255, 255, 0.5)'
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!isMobile) {
-            e.target.style.backgroundColor = 'rgba(0, 0, 0, 0.7)'
-            e.target.style.borderColor = 'rgba(255, 255, 255, 0.3)'
-          }
-        }}
-      >
-        {isFirstPerson ? '🌍 Orbit View' : '🚶 First Person'}
-      </button>
+
+      {/* Back to Orbit Button (only in first-person mode) */}
+      {isFirstPerson && (
+        <button
+          onClick={toggleMode}
+          style={{
+            position: 'absolute',
+            top: isMobile ? '10px' : '20px',
+            right: isMobile ? '10px' : '20px',
+            zIndex: 1000,
+            padding: isMobile ? '10px 16px' : '12px 24px',
+            fontSize: isMobile ? '14px' : '16px',
+            fontWeight: 'bold',
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: 'white',
+            border: '2px solid rgba(255, 255, 255, 0.3)',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            backdropFilter: 'blur(10px)',
+            transition: 'all 0.3s ease',
+            userSelect: 'none',
+            WebkitUserSelect: 'none'
+          }}
+          onMouseEnter={(e) => {
+            if (!isMobile) {
+              e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'
+              e.target.style.borderColor = 'rgba(255, 255, 255, 0.5)'
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isMobile) {
+              e.target.style.backgroundColor = 'rgba(0, 0, 0, 0.7)'
+              e.target.style.borderColor = 'rgba(255, 255, 255, 0.3)'
+            }
+          }}
+        >
+          🌍 Orbit View
+        </button>
+      )}
 
       {/* Mobile Virtual Joystick */}
       {isMobile && isFirstPerson && (
